@@ -36,7 +36,7 @@ def extract_text(msg, header_one, header_two):
 
 @functools.lru_cache(maxsize=100)
 def fetch_gmail_messages(list, header_one, header_two):
-    """Fetches messages labeled StrictlyVC from my gmail account"""
+    """Fetches messages labeled {list} from gmail account"""
     creds = None
     if os.path.exists('token.json'):
         creds = Credentials.from_authorized_user_file('token.json', SCOPES)
