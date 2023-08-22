@@ -1,5 +1,6 @@
 import os
 import time
+import re
 
 from dotenv import load_dotenv
 import openai
@@ -41,10 +42,10 @@ def generate_prompt(text):
     return """Extract the Company name, Location, Age, Sector, Description, Funding, Total Funding, & Investors where available from the Text. The text may contain entries for multiple Companies:
 
 I expect output in the form of:
-Extracted Information: "Company name: FarmWorks; Location: Kenya; Age: N/A; Sector: Agtech; Description: Building clusters of mid-sized farms; Funding: $4.1 million; Total Funding: $5.6 million; Investors: Acumen Resilient Agriculture Fund, Livelihood Impact Fund, Vested World, family offices, angel investors"
-"Company name: Kincell Bio; Location: Gainesville, FL; Age: N/A; Sector: Cell-based medicines; Description: Designing and growing a network of production hubs; Funding: $36 million; Total Funding: N/A; Investors: Kineticos Ventures"
+1) Company name: Sangon Biotech; Location: Shanghai; Age: 20 years old; Sector: Life sciences research; Description: Provides research services, reagents, and kits for the Chinese life sciences industry; Funding: $290 million; Total Funding: $296.6 million; Investors: Novo Holdings, GL Capital, CPE, Greenwoods Asset Management, Huagai Capital, CDB Venture, China Merchant Health
+2) Company name: Viome Life Sciences; Location: Bellevue, WA; Age: 7 years old; Sector: Microbial analysis and personalized nutrition; Description: Sells at-home kits that analyze the microbial composition of stool samples and provide food recommendations as well as supplements and probiotics; Funding: $86.5 million; Total Funding: N/A; Investors: Khosla Ventures, Bold Capital
 
-Fill in as much info as you can. Do not omit companies, I always need all companies. Do not provide additional commentary, just the extracted information.
+Fill in as much info as you can. Do not omit companies, I always need all companies. Do not provide additional commentary, just the extracted information. DO NOT DEVIATE FROM THE EXPECTED OUTPUT FORMAT
 
 Text: {}
 Extract:""".format(text)
@@ -68,28 +69,40 @@ def extract_to_dataframe(extracted_info):
     return pd.DataFrame([data_dict]) # Convert the dictionary into a DataFrame
 
 def dataframe_entry(result):
-    global df
+    # Remove "Extracted Information:" prefix if present
+    result = result.replace("Extracted Information:", "").strip()
+
     entries = result.split('\n')
     entries_processed = 0
+    dfs = []
+
     for entry in entries:
-        if entry.strip():  # Skip empty strings
-            try:
-                new_entry = extract_to_dataframe(entry)
-                if 'df' in globals():
-                    df = pd.concat([df, new_entry], ignore_index=True)
-                else:
-                    df = new_entry
-                entries_processed += 1
-            except Exception as e:
-                print(f"Failed to process entry: {entry}. Error: {e}")
-    return entries_processed
+        entry = entry.strip()
+        # Remove leading numbers or quotes
+        entry = re.sub(r'^\d+\) ', '', entry)
+        entry = entry.strip("\"")
+
+        if not entry.startswith("Company name:"):
+            print(f"Skipping invalid entry: {entry}")
+            continue
+
+        try:
+            new_entry = extract_to_dataframe(entry)
+            dfs.append(new_entry)
+            entries_processed += 1
+        except Exception as e:
+            print(f"Failed to process entry: {entry}. Error: {e}")
+
+    return pd.concat(dfs, ignore_index=True), entries_processed
 
 def process_messages(messages):
-    global df
+    df_total = pd.DataFrame()
     for i, message in tqdm(enumerate(messages), desc="Processing messages", total=len(messages)):
         paragraphs = [p for p in message.strip().split('\n') if p]
         result = make_request(message)
-        entries_processed = dataframe_entry(result)
+        df_entry, entries_processed = dataframe_entry(result)
+        df_total = pd.concat([df_total, df_entry], ignore_index=True)
         if entries_processed != len(paragraphs):
             print(f"Message ID: {i} has {len(paragraphs)} paragraphs, but {entries_processed} entries were processed.")
-    return df
+
+    return df_total
