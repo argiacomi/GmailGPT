@@ -16,6 +16,8 @@ request_limit_per_minute = 3500
 tokens_used = 0
 requests_made = 0
 current_minute = int(time.time() / 60)
+MAX_RETRIES = 3
+BACKOFF_FACTOR = 5
 
 # Load your API key from an environment variable or secret management service
 load_dotenv()
@@ -35,8 +37,13 @@ def check_rate_limits():
     if new_minute != current_minute:
         reset_counters()
     if tokens_used >= token_limit_per_minute or requests_made >= request_limit_per_minute:
+        print("waiting...")
         time.sleep(60 - (time.time() % 60))
         reset_counters()
+
+def is_response_cutoff(response):
+    cutoff_patterns = [r"Note", r"extract(ion|ed)?", r"remain(ing)?", r"limit(ation)?s?"]
+    return all(re.search(pattern, response, re.IGNORECASE) for pattern in cutoff_patterns)
 
 def generate_prompt(text):
     return """Extract the Company name, Location, Age, Sector, Description, Funding, Total Funding, & Investors where available from the Text. The text may contain entries for multiple Companies:
@@ -52,20 +59,49 @@ Extract:""".format(text)
 
 def make_request(message):
     global tokens_used, requests_made
-    check_rate_limits()
-    prompt = generate_prompt(message)
-    num_tokens = len(encoding.encode(prompt))
-    if num_tokens + tokens_used > token_limit_per_minute:
-        time.sleep(60 - (time.time() % 60))
-        reset_counters()
-    response = openai.ChatCompletion.create(model="gpt-3.5-turbo", messages=[{"role": "user", "content": prompt}])
-    tokens_used += response.usage['total_tokens']
-    requests_made += 1
-    return response.choices[0].message.content
+
+    retries = 0
+    full_response = ""
+    continuation_prompt = "Please continue the extraction where you left off."
+    while retries < MAX_RETRIES:
+        print("API Call {} in message. {} total.:".format(retries + 1, requests_made + 1))
+        try:
+            check_rate_limits()
+            if full_response == "":
+                prompt = generate_prompt(message)
+            else:
+                prompt = continuation_prompt
+            num_tokens = len(encoding.encode(prompt))
+            if num_tokens + tokens_used > token_limit_per_minute:
+                time.sleep(60 - (time.time() % 60))
+                reset_counters()
+            response = openai.ChatCompletion.create(
+                model=model,
+                messages=[
+                    {"role": "user", "content": prompt},
+                    {"role": "system", "content": "You are a helpful, robotic assistant that always provides responses in the exact format they are asked for."}
+                ],
+                temperature = 0.01,
+            )
+            tokens_used += response.usage['total_tokens']
+            requests_made += 1
+            full_response += response.choices[0].message.content
+
+            if not is_response_cutoff(full_response):
+                return full_response
+
+        except (openai.error.APIError, openai.error.Timeout, openai.error.RateLimitError, openai.error.APIConnectionError, openai.error.ServiceUnavailableError) as e:
+            retries += 1
+            sleep_time = BACKOFF_FACTOR ** retries  # Exponential backoff
+            print(f"Error occurred: {str(e)}. Retrying in {sleep_time} seconds...")
+            time.sleep(sleep_time)
+            if retries == MAX_RETRIES:
+                print("Max retries limit reached.")
+                raise e
 
 def extract_to_dataframe(extracted_info):
     key_value_pairs = [item.split(': ') for item in extracted_info.split('; ')] # Split the extracted information into key-value pairs
-    data_dict = {pair[0]: pair[1] for pair in key_value_pairs} # Convert the key-value pairs into a dictionary
+    data_dict = {pair[0]: pair[1] if len(pair) > 1 else "N/A" for pair in key_value_pairs} # Convert the key-value pairs into a dictionary
     return pd.DataFrame([data_dict]) # Convert the dictionary into a DataFrame
 
 def dataframe_entry(result):
@@ -76,10 +112,10 @@ def dataframe_entry(result):
     entries_processed = 0
     dfs = []
 
+
     for entry in entries:
-        entry = entry.strip()
-        # Remove leading numbers or quotes
         entry = re.sub(r'^\d+\) ', '', entry)
+        entry = entry.strip()
         entry = entry.strip("\"")
 
         if not entry.startswith("Company name:"):
@@ -92,17 +128,30 @@ def dataframe_entry(result):
             entries_processed += 1
         except Exception as e:
             print(f"Failed to process entry: {entry}. Error: {e}")
+            raise e
 
     return pd.concat(dfs, ignore_index=True), entries_processed
 
 def process_messages(messages):
     df_total = pd.DataFrame()
-    for i, message in tqdm(enumerate(messages), desc="Processing messages", total=len(messages)):
-        paragraphs = [p for p in message.strip().split('\n') if p]
-        result = make_request(message)
-        df_entry, entries_processed = dataframe_entry(result)
-        df_total = pd.concat([df_total, df_entry], ignore_index=True)
-        if entries_processed != len(paragraphs):
-            print(f"Message ID: {i} has {len(paragraphs)} paragraphs, but {entries_processed} entries were processed.")
+    try:
+        for i, message in tqdm(enumerate(messages), desc="Processing messages", total=len(messages)):
+            paragraphs = [p for p in message.strip().split('\n') if p]
+            print("Processing message {}:".format(i+1))
+            result = make_request(message)
+            df_entry, entries_processed = dataframe_entry(result)
+            df_total = pd.concat([df_total, df_entry], ignore_index=True)
+            if entries_processed != len(paragraphs)-3:
+                print(f"Message ID: {i} has {len(paragraphs)} paragraphs, but {entries_processed} entries were processed.")
+            if i % 10 == 0:
+              df_total.to_csv('interim.csv', index=False) # Save the data to a CSV file after each message
+
+    except (openai.error.APIError, openai.error.Timeout, openai.error.RateLimitError, openai.error.APIConnectionError, openai.error.ServiceUnavailableError) as e:
+        print(f"Error occurred: {str(e)}. Saving current state to 'error_backup.csv'.")
+        df_total.to_csv('error_backup.csv', index=False)
+    except Exception as e:
+        print(f"Unexpected error: {str(e)}. Saving current state to 'error_backup.csv'.")
+        df_total.to_csv('error_backup.csv', index=False)
+        raise e
 
     return df_total
