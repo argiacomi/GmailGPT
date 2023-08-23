@@ -64,7 +64,7 @@ def make_request(message):
     full_response = ""
     continuation_prompt = "Please continue the extraction where you left off."
     while retries < MAX_RETRIES:
-        print("API Call {} in message. {} total.:".format(retries + 1, requests_made + 1))
+        print("API Call {} in message, {} total:".format(retries + 1, requests_made + 1))
         try:
             check_rate_limits()
             if full_response == "":
