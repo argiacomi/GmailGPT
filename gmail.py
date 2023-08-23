@@ -50,6 +50,7 @@ def fetch_gmail_messages(list, header_one, header_two):
             token.write(creds.to_json())
 
     messages_list = []
+    messages_dates = []
     try:
         service = build('gmail', 'v1', credentials=creds)
         results = service.users().labels().list(userId='me').execute()
@@ -76,8 +77,11 @@ def fetch_gmail_messages(list, header_one, header_two):
             message_text = extract_text(msg, header_one, header_two) + "\n\n"
             if message_text:
                 messages_list.append(message_text)
+            timestamp = int(msg['internalDate']) / 1000
+            email_date = time.strftime('%m/%d/%Y', time.gmtime(timestamp))
+            messages_dates.append(email_date)
 
     except HttpError as error:
         print(f'An error occurred: {error}')
 
-    return messages_list
+    return messages_list, messages_dates

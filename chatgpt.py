@@ -132,7 +132,7 @@ def dataframe_entry(result):
 
     return pd.concat(dfs, ignore_index=True), entries_processed
 
-def process_messages(messages):
+def process_messages(messages, email_dates):
     df_total = pd.DataFrame()
     try:
         for i, message in tqdm(enumerate(messages), desc="Processing messages", total=len(messages)):
@@ -140,8 +140,9 @@ def process_messages(messages):
             print("Processing message {}:".format(i+1))
             result = make_request(message)
             df_entry, entries_processed = dataframe_entry(result)
+            df_entry['Date'] = email_dates[i]
             df_total = pd.concat([df_total, df_entry], ignore_index=True)
-            if entries_processed != len(paragraphs)-3:
+            if entries_processed < len(paragraphs)-3:
                 print(f"Message ID: {i} has {len(paragraphs)} paragraphs, but {entries_processed} entries were processed.")
             if i % 10 == 0:
               df_total.to_csv('interim.csv', index=False) # Save the data to a CSV file after each message

@@ -18,7 +18,7 @@ def main():
     header_two = input("Enter header two: ")
     search_string = input("Enter the search string (Press Enter to start from default index 0): ")
 
-    messages = fetch_gmail_messages(list=list_name, header_one=header_one, header_two=header_two)
+    messages, email_dates = fetch_gmail_messages(list=list_name, header_one=header_one, header_two=header_two)
 
     start_index = 0
     if search_string:
@@ -26,9 +26,9 @@ def main():
 
     print(f"Starting from index: {start_index}")
 
-    df = process_messages(messages[start_index:])
-    df.head()
+    df = process_messages(messages[start_index:], email_dates[start_index:])
     df.to_csv('output.csv', index=False)
+    df.head()
 
 if __name__ == '__main__':
     main()
