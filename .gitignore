@@ -1,5 +1,10 @@
+Files to ignore:
 .env
 *.json
-__pycache__/*
 *.ipynb
 *.csv
+*.plist
+
+Folders to ignore:
+__pycache__/*
+funding_env/*

@@ -10,10 +10,19 @@ from tqdm import tqdm
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
+from googleapiclient.http import MediaFileUpload
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
-SCOPES = ['https://www.googleapis.com/auth/gmail.readonly']
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+CREDENTIALS_PATH = os.path.join(BASE_DIR, 'creds/credentials.json')
+TOKEN_PATH = os.path.join(BASE_DIR, 'creds/token.json')
+
+SCOPES = [
+  'https://www.googleapis.com/auth/gmail.readonly',
+  'https://www.googleapis.com/auth/drive.file',
+  'https://www.googleapis.com/auth/drive.metadata'
+]
 
 def extract_text(msg, header_one, header_two):
     """Extracts the text between the specified headers from the message."""
@@ -34,20 +43,25 @@ def extract_text(msg, header_one, header_two):
                 return re.sub(r'\n+', '\n', matches[0].strip()) # Remove multiple consecutive newline characters
     return ""
 
-@functools.lru_cache(maxsize=100)
-def fetch_gmail_messages(list, header_one, header_two):
-    """Fetches messages labeled {list} from gmail account"""
+def retrieve_google_creds():
     creds = None
-    if os.path.exists('token.json'):
-        creds = Credentials.from_authorized_user_file('token.json', SCOPES)
+    if os.path.exists(TOKEN_PATH):
+        creds = Credentials.from_authorized_user_file(TOKEN_PATH, SCOPES)
     if not creds or not creds.valid:
         if creds and creds.expired and creds.refresh_token:
             creds.refresh(Request())
         else:
-            flow = InstalledAppFlow.from_client_secrets_file('credentials.json', SCOPES)
+            flow = InstalledAppFlow.from_client_secrets_file(CREDENTIALS_PATH, SCOPES)
             creds = flow.run_local_server(port=0)
-        with open('token.json', 'w') as token:
+        with open(TOKEN_PATH, 'w') as token:
             token.write(creds.to_json())
+    return creds
+
+@functools.lru_cache(maxsize=100)
+def fetch_gmail_messages(list, header_one, header_two):
+    """Fetches messages labeled {list} from gmail account"""
+
+    creds = retrieve_google_creds()
 
     messages_list = []
     messages_dates = []
@@ -85,3 +99,25 @@ def fetch_gmail_messages(list, header_one, header_two):
         print(f'An error occurred: {error}')
 
     return messages_list, messages_dates
+
+def push_to_drive(file_name, folder_id):
+    """Pushes completed funding parse to Google Drive"""
+
+    creds = retrieve_google_creds()
+
+    try:
+        # create drive api client
+        service = build('drive', 'v3', credentials=creds)
+
+        file_metadata = {'name': file_name, 'parents': [folder_id]}
+        media = MediaFileUpload(file_name,
+                                mimetype='text/csv')
+        # pylint: disable=maybe-no-member
+        file = service.files().create(body=file_metadata, media_body=media,
+                                      fields='id').execute()
+
+    except HttpError as error:
+        print(F'An error occurred: {error}')
+        return None
+
+    return file.get('id')

@@ -1,6 +1,6 @@
 import os
-import time
 import re
+import time
 
 from dotenv import load_dotenv
 import openai
@@ -18,6 +18,10 @@ requests_made = 0
 current_minute = int(time.time() / 60)
 MAX_RETRIES = 3
 BACKOFF_FACTOR = 5
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+INTERIM_OUTPUT = os.path.join(BASE_DIR, 'file_output/interim/interim.csv')
+ERROR_OUTPUT = os.path.join(BASE_DIR, 'file_output/errors/error_backup.csv')
 
 # Load your API key from an environment variable or secret management service
 load_dotenv()
@@ -132,7 +136,7 @@ def dataframe_entry(result):
 
     return pd.concat(dfs, ignore_index=True), entries_processed
 
-def process_messages(messages, email_dates):
+def process_messages(messages, email_dates, sources):
     df_total = pd.DataFrame()
     try:
         for i, message in tqdm(enumerate(messages), desc="Processing messages", total=len(messages)):
@@ -141,18 +145,19 @@ def process_messages(messages, email_dates):
             result = make_request(message)
             df_entry, entries_processed = dataframe_entry(result)
             df_entry['Date'] = email_dates[i]
+            df_entry['Source'] = sources[i]
             df_total = pd.concat([df_total, df_entry], ignore_index=True)
             if entries_processed < len(paragraphs)-3:
                 print(f"Message ID: {i} has {len(paragraphs)} paragraphs, but {entries_processed} entries were processed.")
             if i % 10 == 0:
-              df_total.to_csv('interim.csv', index=False) # Save the data to a CSV file after each message
+              df_total.to_csv(INTERIM_OUTPUT, index=False)
 
     except (openai.error.APIError, openai.error.Timeout, openai.error.RateLimitError, openai.error.APIConnectionError, openai.error.ServiceUnavailableError) as e:
         print(f"Error occurred: {str(e)}. Saving current state to 'error_backup.csv'.")
-        df_total.to_csv('error_backup.csv', index=False)
+        df_total.to_csv(ERROR_OUTPUT, index=False)
     except Exception as e:
         print(f"Unexpected error: {str(e)}. Saving current state to 'error_backup.csv'.")
-        df_total.to_csv('error_backup.csv', index=False)
+        df_total.to_csv(ERROR_OUTPUT, index=False)
         raise e
 
     return df_total
